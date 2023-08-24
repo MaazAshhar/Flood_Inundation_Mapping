@@ -1,0 +1,50 @@
+var L8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA");
+
+
+var image = L8.filterBounds(study_area)
+              .filterDate('2021-12-15','2022-06-15')
+              .filterMetadata('CLOUD_COVER','less_than',1)
+              .median()
+              .clip(study_area);
+
+
+
+
+Map.addLayer(image,imageVisParam,"Landsat_image",false);
+
+var training = water.merge(vegetation).merge(builtUp).merge(bareland);
+
+print(training);
+
+var bands = ['B1','B2','B3','B4','B5','B6','B7'];
+var input = image.select(bands);
+
+var trainImage = input.sampleRegions({
+  collection: training,
+  properties: ['Class'],
+  scale: 30});
+  
+  print(trainImage);
+  
+  var trainData = trainImage.randomColumn();
+  var trainSet = trainData.filter(ee.Filter.lessThan('random',0.8));
+  var testSet = trainData.filter(ee.Filter.greaterThanOrEquals('random',0.8));
+  
+  
+ var classifier = ee.Classifier.smileCart().train({
+   features: trainSet,
+   classProperty: 'Class',
+   inputProperties: bands});
+   
+
+var classified = input.classify(classifier);
+
+Map.addLayer(classified,{min:0,max:3,palette:['blue','green','red','yellow']},'LULC',false);
+
+// Export.image.toDrive({
+//   image:classified,
+//   description:'Land_Use_Land_Cover',
+//   scale:40,
+//   region:study_area,
+//   maxPixels:1e13,
+// });

@@ -1,0 +1,91 @@
+var bands=['VV'];
+var input=after1.select(bands);
+var w=ee.FeatureCollection(w_point);
+var l=ee.FeatureCollection(l_point);
+var training_data=w.merge(l);
+
+var classifierTraining = input.select(bands)
+    .sampleRegions({
+      collection: training_data, 
+      properties: ['class'], 
+      scale: 50
+    });
+    
+var trainedClassifier = ee.Classifier.smileCart(100).train({
+  features: classifierTraining,
+  classProperty: 'class',
+  inputProperties: bands
+});
+
+var trained = trainedClassifier.train(classifierTraining, 'class', bands);
+
+// Classify the image.
+var classified = input.classify(trained);
+Map.addLayer(classified.clip(study_area),{min: 1, max: 2, palette: ['orange', 'cyan']},'Inundation',false);
+
+
+
+// Export.image.toDrive({
+//   image:classified,
+//   description:'CART_before_masking',
+//   scale:40,
+//   region:study_area,
+//   maxPixels:1e13,
+// });
+
+
+
+
+// removing permanent water
+
+var permanentWater= gsw.select('seasonality').gte(5).clip(study_area);
+var flooded = classified.where(permanentWater,0).selfMask().rename('water');
+
+
+// Removing isolated pixels
+
+var connectedPixelThreshold = 8;
+var connections = flooded.connectedPixelCount(25);
+var flooded = flooded.updateMask(connections.gt(connectedPixelThreshold));
+
+Map.addLayer(flooded,{min:0,max:1},'final flood estimate',false);
+
+
+// Calculating area
+var stats = flooded.multiply(ee.Image.pixelArea()).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: study_area,
+  scale: 40,
+  maxPixels: 1e13,
+  tileScale: 16
+});
+
+print(stats);
+var flood_area = ee.Number(stats.get('water')).divide(10000).round();
+print('Flooded Area in ha Smile Cart method refined:', flood_area);
+
+// Checking the accuracy of model
+
+var trainingTesting = classifierTraining.randomColumn();
+var trainingSet = trainingTesting
+.filter(ee.Filter.lessThan('random', 0.7));
+var testingSet = trainingTesting
+.filter(ee.Filter.greaterThanOrEquals('random', 0.7));
+
+// Train the classifier with the trainingSet:
+var trained = ee.Classifier.smileCart(100).train({
+  features: trainingSet, 
+  classProperty: 'class', 
+  inputProperties: bands
+});
+//Classify the testingSet and get a confusion matrix.
+var confusionMatrix = ee.ConfusionMatrix(testingSet.classify(trained)
+    .errorMatrix({
+      actual: 'class', 
+      predicted: 'classification'
+    }));
+print('Confusion matrix:', confusionMatrix);
+print('Overall Accuracy:', confusionMatrix.accuracy());
+print('Producers Accuracy:', confusionMatrix.producersAccuracy());
+print('Consumers Accuracy:', confusionMatrix.consumersAccuracy());
+print('Kappa Co-efficient:', confusionMatrix.kappa());
